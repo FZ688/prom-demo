@@ -1,0 +1,42 @@
+# prom-demo 的告警规则（PrometheusRule CRD）+ Alertmanager 路由演示
+---
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: prom-demo-rules
+  namespace: prom-demo
+  labels:
+    app: prom-demo
+spec:
+  groups:
+    # recording rule：预聚合
+    - name: prom-demo.recording
+      interval: 30s
+      rules:
+        - record: demo:orders:rate5m
+          expr: sum by (type) (rate(demo_orders_total[5m]))
+        - record: demo:http:p95_duration
+          expr: histogram_quantile(0.95, sum by (le) (rate(demo_order_duration_seconds_bucket[5m])))
+    #  alerting rule：两条演示告警
+    - name: prom-demo.alerting
+      rules:
+        # 演示 1：订单速率归零
+        - alert: DemoOrdersStopped
+          expr: sum(rate(demo_orders_total[5m])) == 0
+          for: 2m              # 持续 2 分钟才触发（避免抖动误报）
+          labels:
+            severity: warning
+            service: prom-demo
+          annotations:
+            summary: "prom-demo 已 5 分钟没有新订单"
+            description: "rate(demo_orders_total[5m]) = {{ $value }}，持续 2 分钟为 0。"
+            runbook_url: "https://example.com/runbook/demo-orders"
+        # 演示 2：抓取目标消失
+        - alert: DemoTargetMissing
+          expr: absent(up{job="prom-demo"})
+          for: 1m
+          labels:
+            severity: critical
+            service: prom-demo
+          annotations:
+            summary: "prom-demo 的抓取目标全部消失"

@@ -1,0 +1,90 @@
+# prom-demo：应用埋点教学的完整 K8s 清单
+# Deployment + Service + ServiceMonitor（被 kube-prometheus-stack 自动发现）
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: prom-demo
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: prom-demo
+  namespace: prom-demo
+  labels:
+    app: prom-demo
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: prom-demo
+  template:
+    metadata:
+      labels:
+        app: prom-demo
+      annotations:
+        # 约定式注解：ServiceMonitor 的 relabel 常用
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "8000"
+        prometheus.io/path: "/metrics"
+    spec:
+      containers:
+        - name: demo
+          image: host.docker.internal:8080/zdevops/prom-demo:v1
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: http            # ServiceMonitor 的 endpoints.port 会 引用它
+              containerPort: 8000
+          env:
+            - name: DJANGO_SETTINGS_MODULE
+              value: demo.settings
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          resources:
+            requests: { cpu: 100m, memory: 128Mi }
+            limits:   { cpu: 500m, memory: 256Mi }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: prom-demo
+  namespace: prom-demo
+  labels:                # ServiceMonitor 通过这些标签找到这个Service
+    app: prom-demo
+spec:
+  type: NodePort
+  selector:
+    app: prom-demo
+  ports:
+    - name: http         # 名字会被 endpoints[0].port: http 引用
+      port: 8000
+      targetPort: http
+      nodePort: 30810
+---
+# ServiceMonitor
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: prom-demo
+  namespace: prom-demo
+  labels:
+    app: prom-demo
+spec:
+  # 根据标签匹配 Service
+  selector:
+    matchLabels:
+      app: prom-demo
+  # 命名空间 ServiceMonitor和 Service 都在 prom-demo ns 里
+  namespaceSelector:
+    matchNames:
+      - prom-demo
+  # 声明 endpoint
+  endpoints:
+    - port: http         # 引用 Service ports[].name（这里需要注意，不是端口号）
+      path: /metrics     # 抓取路径（django-prometheus 的默认端点）
+      interval: 15s      # 抓取间隔
+      scrapeTimeout: 10s
